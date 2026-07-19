@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Speech Recognition &amp; Synthesis</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #1a1e27;
+      --panel-2: #232936;
+      --text: #f2f5fa;
+      --muted: #9aa5b8;
+      --accent: #4da3ff;
+      --chosen: #ffd166;
+      --nontop: #e06cff;
+      --bar-bg: #2b3242;
+      --border: #2e3646;
+      --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 20px;
+      line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 32px 28px 70px; }
+
+    h1 { font-size: 40px; margin: 0 0 4px; letter-spacing: -0.5px; }
+    .subtitle { color: var(--muted); font-size: 20px; margin: 0 0 26px; }
+
+    /* Two equal columns (recognition | synthesis); stacks under 900px. */
+    .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 22px;
+    }
+
+    /* Eyebrow / section labels */
+    label, .section-label {
+      display: block;
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    /* Shared text box (full width, above both columns) */
+    textarea {
+      width: 100%;
+      min-height: 96px;
+      resize: vertical;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 22px;
+      font-family: inherit;
+      line-height: 1.4;
+    }
+    textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+    /* Buttons */
+    .buttons { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+    button {
+      font-size: 20px;
+      font-weight: 600;
+      font-family: inherit;
+      padding: 14px 22px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #2c3444; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; }
+    button.primary:hover:not(:disabled) { background: #6bb4ff; }
+    /* Live mic state: danger red so "we're recording" is unmistakable. */
+    button.recording { background: var(--danger); border-color: var(--danger); color: #180606; }
+    button.recording:hover:not(:disabled) { background: #ff8585; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* A small pulsing dot next to the mic button while listening. */
+    .rec-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--danger); display: inline-block; margin-right: 4px;
+      vertical-align: middle; animation: pulse 1s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+    /* Voice / speaker-embedding picker */
+    select {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 18px;
+      font-family: inherit;
+    }
+    select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    select:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Model info block (monospace readout under each column). */
+    .model-line {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 15px; color: var(--muted);
+      background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 14px; line-height: 1.5;
+    }
+
+    /* One-time model download progress bar (family track/fill). */
+    .track {
+      background: var(--bar-bg); border-radius: 8px; height: 34px;
+      overflow: hidden; margin-top: 10px;
+    }
+    .fill {
+      height: 100%; border-radius: 8px 0 0 8px;
+      background: linear-gradient(90deg, #3a72c9, var(--accent));
+      transition: width 0.35s ease; min-width: 2px;
+    }
+
+    /* Status / transcript line */
+    .status { min-height: 24px; color: var(--muted); font-size: 17px; margin-top: 16px; }
+    .status.error { color: var(--danger); }
+    .meta-value { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--chosen); }
+
+    /* Footer */
+    .footnote { margin-top: 30px; color: var(--muted); font-size: 15px; line-height: 1.6; }
+    .footnote code { background: var(--panel-2); padding: 2px 6px; border-radius: 5px; font-size: 14px; }
+    .footnote a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+    .footnote a:hover { color: var(--accent); }
+    .repo-link { margin-top: 14px; }
+
+    /* p5 canvas (mic level meter). */
+    canvas { display: block; max-width: 100%; }
+    .meter {
+      margin-top: 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: var(--bar-bg);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Speech Recognition &amp; Synthesis</h1>
+    <p class="subtitle">
+      Speech-to-text and text-to-speech running entirely in your browser —
+      local Whisper and SpeechT5 models via Transformers.js (one-time download).
+    </p>
+
+    <!-- SHARED TEXT BOX — both columns read and write this one field. -->
+    <div class="panel">
+      <label for="sharedText">Shared text</label>
+      <textarea id="sharedText" spellcheck="false" placeholder="Speak on the left, or type here…"></textarea>
+    </div>
+
+    <div class="layout">
+      <!-- LEFT: speech recognition (Whisper) -->
+      <div class="panel">
+        <p class="section-label">Speech recognition</p>
+        <div class="buttons">
+          <button class="primary" id="micBtn" disabled>Start recording</button>
+          <button id="clearBtn">Clear</button>
+        </div>
+
+        <!-- p5 mic level meter -->
+        <div class="meter" id="meter"></div>
+
+        <p class="section-label" style="margin-top: 18px">Model</p>
+        <div class="model-line">Whisper tiny.en · speech-to-text · ~78 MB · runs locally</div>
+        <div class="track" id="asrTrack"><div class="fill" id="asrFill" style="width:0%"></div></div>
+
+        <div class="status" id="recStatus">Loading model…</div>
+      </div>
+
+      <!-- RIGHT: speech synthesis (SpeechT5) -->
+      <div class="panel">
+        <p class="section-label">Speech synthesis</p>
+
+        <label for="speaker" style="margin-top: 4px">Speaker embedding</label>
+        <select id="speaker" disabled></select>
+
+        <div class="buttons">
+          <button class="primary" id="speakBtn" disabled>Speak →</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+
+        <p class="section-label" style="margin-top: 18px">Model</p>
+        <div class="model-line">SpeechT5 · text-to-speech · ~240 MB · runs locally</div>
+        <div class="track" id="ttsTrack"><div class="fill" id="ttsFill" style="width:0%"></div></div>
+
+        <div class="status" id="synthStatus">Loading model…</div>
+      </div>
+    </div>
+
+    <p class="footnote repo-link">
+      Speech-to-text with <a href="https://huggingface.co/Xenova/whisper-tiny.en" target="_blank" rel="noopener">Whisper</a>
+      and text-to-speech with <a href="https://huggingface.co/Xenova/speecht5_tts" target="_blank" rel="noopener">SpeechT5</a>,
+      both running locally in your browser via
+      <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">Transformers.js</a>.
+      Source on <a href="YOUR_REPO_URL" target="_blank" rel="noopener">GitHub</a>.
+    </p>
+  </div>
+
+  <!-- p5.js (for the mic level meter). -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+
+  <script type="module">
+    // The Transformers.js library is loaded lazily (dynamic import) so the UI — the
+    // speaker picker, buttons, and status lines — is wired up immediately and never
+    // blocks on (or silently dies from) a slow or failed CDN fetch of the ~large lib.
+    // jsDelivr's /+esm endpoint serves the browser-ready ES module bundle
+    // (dist/transformers.web.js); the bare package root is not importable in a browser.
+    const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
+    let pipeline = null; // populated once the library loads
+    async function loadLibrary() {
+      const mod = await import(TRANSFORMERS_URL);
+      pipeline = mod.pipeline;
+      // Loading from the Hugging Face CDN in the browser — don't attempt a local /models/ fetch first.
+      mod.env.allowLocalModels = false;
+      return mod;
+    }
+
+    // ---- DOM ----
+    const sharedText = document.getElementById('sharedText');
+    const micBtn     = document.getElementById('micBtn');
+    const clearBtn   = document.getElementById('clearBtn');
+    const recStatus  = document.getElementById('recStatus');
+    const asrFill    = document.getElementById('asrFill');
+    const asrTrack   = document.getElementById('asrTrack');
+
+    const speakerSel  = document.getElementById('speaker');
+    const speakBtn    = document.getElementById('speakBtn');
+    const stopBtn     = document.getElementById('stopBtn');
+    const synthStatus = document.getElementById('synthStatus');
+    const ttsFill     = document.getElementById('ttsFill');
+    const ttsTrack    = document.getElementById('ttsTrack');
+
+    // WebGPU when available (Chromium family), else CPU/WASM so it can't fail live.
+    const device = ('gpu' in navigator) ? 'webgpu' : 'wasm';
+
+    // ---- Speaker embeddings (SpeechT5 requires an x-vector) ----
+    // The default is the canonical embedding from the Transformers.js docs; the named
+    // CMU-Arctic speakers come from Xenova's extracted x-vector set. All URLs verified.
+    const DOCS_BASE = 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/';
+    const CMU_BASE  = 'https://huggingface.co/datasets/Xenova/cmu-arctic-xvectors-extracted/resolve/main/';
+    const SPEAKERS = [
+      { label: 'Default · US female',  url: DOCS_BASE + 'speaker_embeddings.bin' },
+      { label: 'SLT · US female',      url: CMU_BASE + 'cmu_us_slt_arctic-wav-arctic_a0001.bin' },
+      { label: 'CLB · US female',      url: CMU_BASE + 'cmu_us_clb_arctic-wav-arctic_a0001.bin' },
+      { label: 'BDL · US male',        url: CMU_BASE + 'cmu_us_bdl_arctic-wav-arctic_a0001.bin' },
+      { label: 'RMS · US male',        url: CMU_BASE + 'cmu_us_rms_arctic-wav-arctic_a0001.bin' },
+      { label: 'AWB · Scottish male',  url: CMU_BASE + 'cmu_us_awb_arctic-wav-arctic_a0001.bin' },
+    ];
+    for (const s of SPEAKERS) {
+      const opt = document.createElement('option');
+      opt.value = s.url;
+      opt.textContent = s.label;
+      speakerSel.appendChild(opt);
+    }
+
+    // Each x-vector is tiny (~2 KB = 512 float32). Warm the browser HTTP cache for all
+    // of them up front so switching voices mid-demo has no network hitch on camera.
+    // We pass the URL to the pipeline (its documented form); the warmed cache makes the
+    // fetch instant. A failed warm is harmless — the pipeline re-fetches on demand.
+    function prefetchEmbeddings() {
+      return Promise.all(SPEAKERS.map((s) => fetch(s.url).catch(() => null)));
+    }
+
+    // ---- Progress-bar helpers (driven by Transformers.js progress_callback) ----
+    // A model is several files (configs + tokenizer + the big .onnx weights). We show
+    // ONE bar per column representing ALL of that model's files, weighted by bytes so
+    // the big weights file dominates (a tiny config finishing barely moves the bar).
+    //
+    // The catch: Transformers.js reports each file's size only once its download starts,
+    // so early on we know the size of a couple of small config files but NOT the big
+    // weights file yet. Dividing loaded-bytes by only-the-known-sizes then reads ~99%
+    // while barely anything has actually downloaded. Fix: floor the denominator at the
+    // model's known total size (expectedBytes, ~78 MB Whisper / ~240 MB SpeechT5), so
+    // small finished files read as the low single-digit percentage they really are.
+    // We also never display 100% until every file reports done.
+    function makeProgress(fill, track, statusEl, name, expectedBytes) {
+      const files = new Map(); // file -> { loaded, total, done }
+
+      const render = () => {
+        if (files.size === 0) return;
+        let loaded = 0, known = 0, allDone = true;
+        for (const v of files.values()) {
+          if (!v.done) allDone = false;
+          loaded += (v.done && v.total) ? v.total : v.loaded;
+          known += v.total; // sum of sizes we actually know so far
+        }
+        // Denominator floored at the model's real total so partial knowledge of only the
+        // small files can't inflate the percentage.
+        const total = Math.max(known, expectedBytes);
+        let pct = total ? Math.round((loaded / total) * 100) : 0;
+        if (!allDone) pct = Math.min(pct, 99); // never show 100% until every file is done
+        fill.style.width = pct + '%';
+        statusEl.classList.remove('error');
+        const n = files.size;
+        statusEl.innerHTML =
+          `Downloading ${name}… <span class="meta-value">${pct}%</span>` +
+          (n > 1 ? ` <span style="color:var(--muted)">(${n} files)</span>` : '');
+      };
+
+      return (p) => {
+        if (p.file == null) return;
+        const f = files.get(p.file) || { loaded: 0, total: 0, done: false };
+        if (p.status === 'initiate') {
+          files.set(p.file, f);
+          render();
+        } else if (p.status === 'progress' && typeof p.loaded === 'number' && p.total) {
+          f.loaded = p.loaded; f.total = p.total;
+          files.set(p.file, f);
+          render();
+        } else if (p.status === 'done') {
+          f.done = true;
+          if (f.total) f.loaded = f.total;
+          files.set(p.file, f);
+          render();
+        }
+      };
+    }
+
+    // Called once a pipeline finishes loading — force the bar to a clean 100% and hide
+    // it. This covers the fully-cached refresh case, where few/no progress events fire.
+    function finishProgress(fill, track) {
+      fill.style.width = '100%';
+      track.style.display = 'none';
+    }
+
+    // ---- Load + pre-warm both models ----
+    let asr = null, synth = null;
+
+    async function loadASR() {
+      try {
+        asr = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
+          device, dtype: 'fp32',
+          progress_callback: makeProgress(asrFill, asrTrack, recStatus, 'Whisper', 78 * 1024 * 1024),
+        });
+        finishProgress(asrFill, asrTrack);
+        recStatus.textContent = 'Warming up…';
+        await asr(new Float32Array(16000)); // 1s of silence — hides first-inference compile.
+        micBtn.disabled = false;
+        recStatus.textContent = 'Ready. Click "Start recording" and allow microphone access.';
+      } catch (e) {
+        recStatus.classList.add('error');
+        recStatus.textContent = 'Could not load the speech-recognition model: ' + e.message;
+      }
+    }
+
+    async function loadTTS() {
+      try {
+        synth = await pipeline('text-to-speech', 'Xenova/speecht5_tts', {
+          dtype: 'fp32',
+          progress_callback: makeProgress(ttsFill, ttsTrack, synthStatus, 'SpeechT5', 240 * 1024 * 1024),
+        });
+        finishProgress(ttsFill, ttsTrack);
+        synthStatus.textContent = 'Warming up…';
+        await synth('warm up', { speaker_embeddings: speakerSel.value }); // discard output
+        prefetchEmbeddings(); // fire-and-forget: warm the HTTP cache for all voices
+        speakBtn.disabled = false;
+        speakerSel.disabled = false; // enable voice switching only once the model is ready
+        synthStatus.textContent = 'Ready. Type or dictate text, then click "Speak".';
+      } catch (e) {
+        synthStatus.classList.add('error');
+        synthStatus.textContent = 'Could not load the speech-synthesis model: ' + e.message;
+      }
+    }
+
+    // Load the library once, then both models in parallel; weights are cached by the
+    // browser after the first visit. A library-load failure surfaces in both columns.
+    (async () => {
+      try {
+        await loadLibrary();
+      } catch (e) {
+        for (const el of [recStatus, synthStatus]) {
+          el.classList.add('error');
+          el.textContent = 'Could not load Transformers.js from the CDN: ' + e.message;
+        }
+        return;
+      }
+      loadASR();
+      loadTTS();
+    })();
+
+    // ======================================================================
+    // SPEECH RECOGNITION (press-to-talk, one-shot) — Whisper
+    // ======================================================================
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let chunks = [];
+    let isListening = false;
+
+    // p5 mic level meter (Web Audio AnalyserNode).
+    let audioCtx = null, analyser = null, meterData = null;
+
+    micBtn.addEventListener('click', async () => {
+      if (!isListening) {
+        await startRecording();
+      } else {
+        stopRecording();
+      }
+    });
+
+    async function startRecording() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        recStatus.classList.add('error');
+        recStatus.textContent = 'Microphone access was denied.';
+        return;
+      }
+
+      // Level meter tap.
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(mediaStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      meterData = new Uint8Array(analyser.frequencyBinCount);
+      source.connect(analyser);
+
+      chunks = [];
+      mediaRecorder = new MediaRecorder(mediaStream);
+      mediaRecorder.addEventListener('dataavailable', (e) => { if (e.data.size > 0) chunks.push(e.data); });
+      mediaRecorder.addEventListener('stop', transcribe);
+      mediaRecorder.start();
+
+      isListening = true;
+      micBtn.classList.add('recording');
+      micBtn.textContent = 'Stop recording';
+      recStatus.classList.remove('error');
+      recStatus.innerHTML = '<span class="rec-dot"></span>Listening…';
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+      if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+      isListening = false;
+      micBtn.classList.remove('recording');
+      micBtn.textContent = 'Start recording';
+      analyser = null; // stop the meter
+    }
+
+    async function transcribe() {
+      recStatus.textContent = 'Transcribing…';
+      micBtn.disabled = true;
+      try {
+        const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+        const arrayBuffer = await blob.arrayBuffer();
+
+        // Decode + resample to 16 kHz mono — Whisper needs exactly this or output is garbage.
+        const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const decoded = await decodeCtx.decodeAudioData(arrayBuffer);
+        const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+        const src = off.createBufferSource();
+        src.buffer = decoded;
+        src.connect(off.destination);
+        src.start();
+        const rendered = await off.startRendering();
+        const audio = rendered.getChannelData(0); // Float32Array, 16 kHz mono
+        decodeCtx.close();
+
+        const { text } = await asr(audio);
+        const clean = (text || '').trim();
+        // Append to the shared box (space-separated) so repeated dictation accumulates.
+        sharedText.value = sharedText.value ? (sharedText.value.trim() + ' ' + clean) : clean;
+        recStatus.textContent = clean ? 'Done.' : 'No speech detected — try again.';
+      } catch (e) {
+        recStatus.classList.add('error');
+        recStatus.textContent = 'Transcription failed: ' + e.message;
+      } finally {
+        micBtn.disabled = false;
+      }
+    }
+
+    clearBtn.addEventListener('click', () => {
+      sharedText.value = '';
+      sharedText.focus();
+    });
+
+    // ======================================================================
+    // SPEECH SYNTHESIS — SpeechT5
+    // ======================================================================
+    let playingSource = null;
+    let playCtx = null;
+
+    speakBtn.addEventListener('click', async () => {
+      const text = sharedText.value.trim();
+      if (!text) {
+        synthStatus.classList.remove('error');
+        synthStatus.textContent = 'Nothing to speak — type or dictate some text first.';
+        return;
+      }
+      speakBtn.disabled = true;
+      synthStatus.classList.remove('error');
+      synthStatus.textContent = 'Synthesizing…';
+      try {
+        const out = await synth(text, { speaker_embeddings: speakerSel.value });
+        playAudio(out.audio, out.sampling_rate);
+      } catch (e) {
+        synthStatus.classList.add('error');
+        synthStatus.textContent = 'Synthesis failed: ' + e.message;
+        speakBtn.disabled = false;
+      }
+    });
+
+    function playAudio(float32, sampleRate) {
+      stopPlayback();
+      playCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const buf = playCtx.createBuffer(1, float32.length, sampleRate);
+      buf.getChannelData(0).set(float32);
+      playingSource = playCtx.createBufferSource();
+      playingSource.buffer = buf;
+      playingSource.connect(playCtx.destination);
+      playingSource.addEventListener('ended', () => {
+        synthStatus.textContent = 'Done.';
+        speakBtn.disabled = false;
+        stopBtn.disabled = true;
+      });
+      playingSource.start();
+      synthStatus.textContent = 'Speaking…';
+      stopBtn.disabled = false;
+    }
+
+    function stopPlayback() {
+      if (playingSource) { try { playingSource.stop(); } catch (_) {} playingSource = null; }
+      if (playCtx) { try { playCtx.close(); } catch (_) {} playCtx = null; }
+    }
+
+    stopBtn.addEventListener('click', () => {
+      stopPlayback();
+      synthStatus.textContent = 'Stopped.';
+      speakBtn.disabled = false;
+      stopBtn.disabled = true;
+    });
+
+    // ======================================================================
+    // p5.js mic level meter
+    // ======================================================================
+    new p5((p) => {
+      const meterEl = document.getElementById('meter');
+      let level = 0;
+
+      p.setup = () => {
+        const w = meterEl.clientWidth || 400;
+        const c = p.createCanvas(w, 64);
+        c.parent(meterEl);
+        p.noStroke();
+      };
+
+      p.windowResized = () => {
+        const w = meterEl.clientWidth || 400;
+        p.resizeCanvas(w, 64);
+      };
+
+      p.draw = () => {
+        p.background(43, 50, 66); // --bar-bg
+
+        // Read the live mic level (0..1) when recording; decay toward 0 otherwise.
+        let target = 0;
+        if (analyser && meterData) {
+          analyser.getByteTimeDomainData(meterData);
+          let peak = 0;
+          for (let i = 0; i < meterData.length; i++) {
+            const v = Math.abs(meterData[i] - 128) / 128;
+            if (v > peak) peak = v;
+          }
+          target = peak;
+        }
+        level += (target - level) * 0.3;
+
+        const w = p.width * Math.min(1, level * 1.6);
+        // Blue accent normally; gold when the level is high — matches the family palette.
+        if (level > 0.6) p.fill(255, 209, 102); // --chosen
+        else p.fill(77, 163, 255);              // --accent
+        p.rect(0, 0, w, p.height);
+      };
+    });
+  </script>
+</body>
+</html>
