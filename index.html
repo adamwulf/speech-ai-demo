@@ -33,9 +33,44 @@
     h1 { font-size: 40px; margin: 0 0 4px; letter-spacing: -0.5px; }
     .subtitle { color: var(--muted); font-size: 20px; margin: 0 0 26px; }
 
+    /* Segmented toggle to switch which panels are shown. */
+    .segmented {
+      display: inline-flex;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 5px;
+      gap: 4px;
+      margin: 0 0 26px;
+      max-width: 100%;
+      flex-wrap: wrap;
+    }
+    .segmented button {
+      font-size: 18px;
+      font-weight: 600;
+      padding: 10px 20px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .segmented button:hover:not(.active) { background: var(--panel-2); color: var(--text); }
+    .segmented button.active {
+      background: var(--accent);
+      color: #06121f;
+      border-color: var(--accent);
+    }
+
     /* Two equal columns (recognition | synthesis); stacks under 900px. */
     .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
     @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+    /* View modes hide one column and give the surviving one full width. */
+    .layout[data-view="recognition"] { grid-template-columns: 1fr; }
+    .layout[data-view="recognition"] .synth-panel { display: none; }
+    .layout[data-view="synthesis"]  { grid-template-columns: 1fr; }
+    .layout[data-view="synthesis"]  .recog-panel { display: none; }
 
     .panel {
       background: var(--panel);
@@ -164,15 +199,16 @@
       local Whisper and SpeechT5 models via Transformers.js (one-time download).
     </p>
 
-    <!-- SHARED TEXT BOX — both columns read and write this one field. -->
-    <div class="panel">
-      <label for="sharedText">Shared text</label>
-      <textarea id="sharedText" spellcheck="false" placeholder="Speak on the left, or type here…"></textarea>
+    <!-- View toggle — choose which panel(s) to show. -->
+    <div class="segmented" id="viewToggle" role="tablist" aria-label="Choose which panels to show">
+      <button type="button" data-view="recognition" role="tab" aria-selected="false">Recognition</button>
+      <button type="button" data-view="synthesis" role="tab" aria-selected="false">Speech</button>
+      <button type="button" data-view="both" class="active" role="tab" aria-selected="true">Both</button>
     </div>
 
-    <div class="layout">
+    <div class="layout" id="layout" data-view="both">
       <!-- LEFT: speech recognition (Whisper) -->
-      <div class="panel">
+      <div class="panel recog-panel">
         <p class="section-label">Speech recognition</p>
         <div class="buttons">
           <button class="primary" id="micBtn" disabled>Start recording</button>
@@ -190,7 +226,7 @@
       </div>
 
       <!-- RIGHT: speech synthesis (SpeechT5) -->
-      <div class="panel">
+      <div class="panel synth-panel">
         <p class="section-label">Speech synthesis</p>
 
         <label for="speaker" style="margin-top: 4px">Speaker embedding</label>
@@ -207,6 +243,12 @@
 
         <div class="status" id="synthStatus">Loading model…</div>
       </div>
+    </div>
+
+    <!-- SHARED TEXT BOX — both columns read and write this one field. -->
+    <div class="panel">
+      <label for="sharedText">Shared text</label>
+      <textarea id="sharedText" spellcheck="false" placeholder="Speak on the left, or type here…"></textarea>
     </div>
 
     <p class="footnote repo-link">
@@ -238,6 +280,8 @@
     }
 
     // ---- DOM ----
+    const viewToggle = document.getElementById('viewToggle');
+    const layout     = document.getElementById('layout');
     const sharedText = document.getElementById('sharedText');
     const micBtn     = document.getElementById('micBtn');
     const clearBtn   = document.getElementById('clearBtn');
@@ -251,6 +295,24 @@
     const synthStatus = document.getElementById('synthStatus');
     const ttsFill     = document.getElementById('ttsFill');
     const ttsTrack    = document.getElementById('ttsTrack');
+
+    // ---- View toggle (Recognition / Speech / Both) ----
+    // Flips a data-view attribute the CSS keys off to show/hide each column. The shared
+    // text box stays visible in every mode — it's the bridge between the two panels.
+    viewToggle.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-view]');
+      if (!btn) return;
+      const view = btn.dataset.view;
+      layout.dataset.view = view;
+      for (const b of viewToggle.querySelectorAll('button')) {
+        const on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      }
+      // The mic-meter canvas is sized to its container; force p5 to re-measure now that
+      // the recognition column may have changed width (half ↔ full).
+      window.dispatchEvent(new Event('resize'));
+    });
 
     // WebGPU when available (Chromium family), else CPU/WASM so it can't fail live.
     const device = ('gpu' in navigator) ? 'webgpu' : 'wasm';
