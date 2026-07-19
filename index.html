@@ -288,23 +288,29 @@
     // ONE bar per column representing ALL of that model's files, weighted by bytes so
     // the big weights file dominates (a tiny config finishing barely moves the bar).
     //
-    // Transformers.js reports each file separately. Byte-weighting alone would make the
-    // bar snap backward the instant the large weights file appears (its total suddenly
-    // enters the denominator with loaded=0), which is the "100% then back to 0%" glitch.
-    // Two guards fix that: (1) we only start a bar's byte total from real 'progress'
-    // events (which always carry both loaded and total), and (2) we clamp the DISPLAYED
-    // value so it never moves backward within a single load — the transient dip while a
-    // new file's total is folded in is simply held until real bytes catch up.
-    function makeProgress(fill, track, statusEl, name) {
-      const files = new Map(); // file -> { loaded, total }
-      let shown = 0;           // last displayed percent, monotonic within this load
+    // The catch: Transformers.js reports each file's size only once its download starts,
+    // so early on we know the size of a couple of small config files but NOT the big
+    // weights file yet. Dividing loaded-bytes by only-the-known-sizes then reads ~99%
+    // while barely anything has actually downloaded. Fix: floor the denominator at the
+    // model's known total size (expectedBytes, ~78 MB Whisper / ~240 MB SpeechT5), so
+    // small finished files read as the low single-digit percentage they really are.
+    // We also never display 100% until every file reports done.
+    function makeProgress(fill, track, statusEl, name, expectedBytes) {
+      const files = new Map(); // file -> { loaded, total, done }
 
       const render = () => {
-        let loaded = 0, total = 0;
-        for (const v of files.values()) { loaded += v.loaded; total += v.total; }
-        if (total === 0) return;
-        const pct = Math.max(shown, Math.min(100, Math.round((loaded / total) * 100)));
-        shown = pct;
+        if (files.size === 0) return;
+        let loaded = 0, known = 0, allDone = true;
+        for (const v of files.values()) {
+          if (!v.done) allDone = false;
+          loaded += (v.done && v.total) ? v.total : v.loaded;
+          known += v.total; // sum of sizes we actually know so far
+        }
+        // Denominator floored at the model's real total so partial knowledge of only the
+        // small files can't inflate the percentage.
+        const total = Math.max(known, expectedBytes);
+        let pct = total ? Math.round((loaded / total) * 100) : 0;
+        if (!allDone) pct = Math.min(pct, 99); // never show 100% until every file is done
         fill.style.width = pct + '%';
         statusEl.classList.remove('error');
         const n = files.size;
@@ -315,12 +321,18 @@
 
       return (p) => {
         if (p.file == null) return;
-        if (p.status === 'progress' && typeof p.loaded === 'number' && p.total) {
-          files.set(p.file, { loaded: p.loaded, total: p.total });
+        const f = files.get(p.file) || { loaded: 0, total: 0, done: false };
+        if (p.status === 'initiate') {
+          files.set(p.file, f);
           render();
-        } else if (p.status === 'done' && files.has(p.file)) {
-          const f = files.get(p.file);
-          f.loaded = f.total; // pin finished files to complete
+        } else if (p.status === 'progress' && typeof p.loaded === 'number' && p.total) {
+          f.loaded = p.loaded; f.total = p.total;
+          files.set(p.file, f);
+          render();
+        } else if (p.status === 'done') {
+          f.done = true;
+          if (f.total) f.loaded = f.total;
+          files.set(p.file, f);
           render();
         }
       };
@@ -340,7 +352,7 @@
       try {
         asr = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
           device, dtype: 'fp32',
-          progress_callback: makeProgress(asrFill, asrTrack, recStatus, 'Whisper'),
+          progress_callback: makeProgress(asrFill, asrTrack, recStatus, 'Whisper', 78 * 1024 * 1024),
         });
         finishProgress(asrFill, asrTrack);
         recStatus.textContent = 'Warming up…';
@@ -357,7 +369,7 @@
       try {
         synth = await pipeline('text-to-speech', 'Xenova/speecht5_tts', {
           dtype: 'fp32',
-          progress_callback: makeProgress(ttsFill, ttsTrack, synthStatus, 'SpeechT5'),
+          progress_callback: makeProgress(ttsFill, ttsTrack, synthStatus, 'SpeechT5', 240 * 1024 * 1024),
         });
         finishProgress(ttsFill, ttsTrack);
         synthStatus.textContent = 'Warming up…';
