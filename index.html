@@ -112,6 +112,7 @@
       font-family: inherit;
     }
     select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    select:disabled { opacity: 0.45; cursor: not-allowed; }
 
     /* Model info block (monospace readout under each column). */
     .model-line {
@@ -193,7 +194,7 @@
         <p class="section-label">Speech synthesis</p>
 
         <label for="speaker" style="margin-top: 4px">Speaker embedding</label>
-        <select id="speaker"></select>
+        <select id="speaker" disabled></select>
 
         <div class="buttons">
           <button class="primary" id="speakBtn" disabled>Speak →</button>
@@ -283,22 +284,53 @@
     }
 
     // ---- Progress-bar helpers (driven by Transformers.js progress_callback) ----
+    // A model is several files (configs + tokenizer + the big .onnx weights). We show
+    // ONE bar per column representing ALL of that model's files, weighted by bytes so
+    // the big weights file dominates (a tiny config finishing barely moves the bar).
+    //
+    // Transformers.js reports each file separately. Byte-weighting alone would make the
+    // bar snap backward the instant the large weights file appears (its total suddenly
+    // enters the denominator with loaded=0), which is the "100% then back to 0%" glitch.
+    // Two guards fix that: (1) we only start a bar's byte total from real 'progress'
+    // events (which always carry both loaded and total), and (2) we clamp the DISPLAYED
+    // value so it never moves backward within a single load — the transient dip while a
+    // new file's total is folded in is simply held until real bytes catch up.
     function makeProgress(fill, track, statusEl, name) {
-      // Track per-file download so the bar reflects overall bytes, not per-shard resets.
-      const files = new Map();
+      const files = new Map(); // file -> { loaded, total }
+      let shown = 0;           // last displayed percent, monotonic within this load
+
+      const render = () => {
+        let loaded = 0, total = 0;
+        for (const v of files.values()) { loaded += v.loaded; total += v.total; }
+        if (total === 0) return;
+        const pct = Math.max(shown, Math.min(100, Math.round((loaded / total) * 100)));
+        shown = pct;
+        fill.style.width = pct + '%';
+        statusEl.classList.remove('error');
+        const n = files.size;
+        statusEl.innerHTML =
+          `Downloading ${name}… <span class="meta-value">${pct}%</span>` +
+          (n > 1 ? ` <span style="color:var(--muted)">(${n} files)</span>` : '');
+      };
+
       return (p) => {
+        if (p.file == null) return;
         if (p.status === 'progress' && typeof p.loaded === 'number' && p.total) {
           files.set(p.file, { loaded: p.loaded, total: p.total });
-          let loaded = 0, total = 0;
-          for (const v of files.values()) { loaded += v.loaded; total += v.total; }
-          const pct = total ? Math.round((loaded / total) * 100) : 0;
-          fill.style.width = pct + '%';
-          statusEl.classList.remove('error');
-          statusEl.innerHTML = `Downloading ${name}… <span class="meta-value">${pct}%</span>`;
-        } else if (p.status === 'done' && p.file) {
-          files.set(p.file, { loaded: 1, total: 1 });
+          render();
+        } else if (p.status === 'done' && files.has(p.file)) {
+          const f = files.get(p.file);
+          f.loaded = f.total; // pin finished files to complete
+          render();
         }
       };
+    }
+
+    // Called once a pipeline finishes loading — force the bar to a clean 100% and hide
+    // it. This covers the fully-cached refresh case, where few/no progress events fire.
+    function finishProgress(fill, track) {
+      fill.style.width = '100%';
+      track.style.display = 'none';
     }
 
     // ---- Load + pre-warm both models ----
@@ -310,10 +342,9 @@
           device, dtype: 'fp32',
           progress_callback: makeProgress(asrFill, asrTrack, recStatus, 'Whisper'),
         });
+        finishProgress(asrFill, asrTrack);
         recStatus.textContent = 'Warming up…';
         await asr(new Float32Array(16000)); // 1s of silence — hides first-inference compile.
-        asrFill.style.width = '100%';
-        asrTrack.style.display = 'none';
         micBtn.disabled = false;
         recStatus.textContent = 'Ready. Click "Start recording" and allow microphone access.';
       } catch (e) {
@@ -328,12 +359,12 @@
           dtype: 'fp32',
           progress_callback: makeProgress(ttsFill, ttsTrack, synthStatus, 'SpeechT5'),
         });
+        finishProgress(ttsFill, ttsTrack);
         synthStatus.textContent = 'Warming up…';
         await synth('warm up', { speaker_embeddings: speakerSel.value }); // discard output
         prefetchEmbeddings(); // fire-and-forget: warm the HTTP cache for all voices
-        ttsFill.style.width = '100%';
-        ttsTrack.style.display = 'none';
         speakBtn.disabled = false;
+        speakerSel.disabled = false; // enable voice switching only once the model is ready
         synthStatus.textContent = 'Ready. Type or dictate text, then click "Speak".';
       } catch (e) {
         synthStatus.classList.add('error');
