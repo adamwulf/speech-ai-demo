@@ -212,7 +212,10 @@
         <p class="section-label">Speech recognition</p>
         <div class="buttons">
           <button class="primary" id="micBtn" disabled>Start recording</button>
+          <button id="fileBtn" disabled>Transcribe file…</button>
           <button id="clearBtn">Clear</button>
+          <!-- Hidden picker; fileBtn opens it. Any format the browser can decode (m4a, mp3, wav…). -->
+          <input type="file" id="fileInput" accept="audio/*" hidden />
         </div>
 
         <!-- p5 mic level meter -->
@@ -284,6 +287,8 @@
     const layout     = document.getElementById('layout');
     const sharedText = document.getElementById('sharedText');
     const micBtn     = document.getElementById('micBtn');
+    const fileBtn    = document.getElementById('fileBtn');
+    const fileInput  = document.getElementById('fileInput');
     const clearBtn   = document.getElementById('clearBtn');
     const recStatus  = document.getElementById('recStatus');
     const asrFill    = document.getElementById('asrFill');
@@ -420,7 +425,8 @@
         recStatus.textContent = 'Warming up…';
         await asr(new Float32Array(16000)); // 1s of silence — hides first-inference compile.
         micBtn.disabled = false;
-        recStatus.textContent = 'Ready. Click "Start recording" and allow microphone access.';
+        fileBtn.disabled = false;
+        recStatus.textContent = 'Ready. Click "Start recording", or transcribe an audio file.';
       } catch (e) {
         recStatus.classList.add('error');
         recStatus.textContent = 'Could not load the speech-recognition model: ' + e.message;
@@ -482,9 +488,13 @@
     });
 
     async function startRecording() {
+      // One audio source at a time; transcribe() re-enables it. Disable before the
+      // permission prompt, which can stay open while the rest of the page is clickable.
+      fileBtn.disabled = true;
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (e) {
+        fileBtn.disabled = false;
         recStatus.classList.add('error');
         recStatus.textContent = 'Microphone access was denied.';
         return;
@@ -501,7 +511,9 @@
       chunks = [];
       mediaRecorder = new MediaRecorder(mediaStream);
       mediaRecorder.addEventListener('dataavailable', (e) => { if (e.data.size > 0) chunks.push(e.data); });
-      mediaRecorder.addEventListener('stop', transcribe);
+      mediaRecorder.addEventListener('stop', () => {
+        transcribe(new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' }));
+      });
       mediaRecorder.start();
 
       isListening = true;
@@ -520,16 +532,25 @@
       analyser = null; // stop the meter
     }
 
-    async function transcribe() {
-      recStatus.textContent = 'Transcribing…';
+    // Shared by the mic (a recorded Blob) and the file picker (a File, which is a Blob).
+    async function transcribe(blob) {
+      recStatus.classList.remove('error');
+      recStatus.textContent = 'Decoding audio…';
       micBtn.disabled = true;
+      fileBtn.disabled = true;
       try {
-        const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
         const arrayBuffer = await blob.arrayBuffer();
 
         // Decode + resample to 16 kHz mono — Whisper needs exactly this or output is garbage.
+        // Close the context even when decoding throws (e.g. an unsupported file format),
+        // or repeated bad picks would pile up open AudioContexts.
         const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const decoded = await decodeCtx.decodeAudioData(arrayBuffer);
+        let decoded;
+        try {
+          decoded = await decodeCtx.decodeAudioData(arrayBuffer);
+        } finally {
+          decodeCtx.close();
+        }
         const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
         const src = off.createBufferSource();
         src.buffer = decoded;
@@ -537,9 +558,11 @@
         src.start();
         const rendered = await off.startRendering();
         const audio = rendered.getChannelData(0); // Float32Array, 16 kHz mono
-        decodeCtx.close();
 
-        const { text } = await asr(audio);
+        recStatus.textContent = `Transcribing ${formatDuration(decoded.duration)} of audio…`;
+        // Whisper only sees 30 s at a time, and without chunking everything past the
+        // first 30 s is dropped. Chunk with a 5 s overlap so words at the seams stitch.
+        const { text } = await asr(audio, { chunk_length_s: 30, stride_length_s: 5 });
         const clean = (text || '').trim();
         // Append to the shared box (space-separated) so repeated dictation accumulates.
         sharedText.value = sharedText.value ? (sharedText.value.trim() + ' ' + clean) : clean;
@@ -549,8 +572,23 @@
         recStatus.textContent = 'Transcription failed: ' + e.message;
       } finally {
         micBtn.disabled = false;
+        fileBtn.disabled = false;
       }
     }
+
+    // "1:05" style duration for the status line.
+    function formatDuration(seconds) {
+      const s = Math.round(seconds);
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    // ---- Transcribe an audio file (m4a, mp3, wav…) ----
+    fileBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      fileInput.value = ''; // so picking the same file again still fires 'change'
+      if (file) transcribe(file);
+    });
 
     clearBtn.addEventListener('click', () => {
       sharedText.value = '';
