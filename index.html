@@ -488,9 +488,13 @@
     });
 
     async function startRecording() {
+      // One audio source at a time; transcribe() re-enables it. Disable before the
+      // permission prompt, which can stay open while the rest of the page is clickable.
+      fileBtn.disabled = true;
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (e) {
+        fileBtn.disabled = false;
         recStatus.classList.add('error');
         recStatus.textContent = 'Microphone access was denied.';
         return;
@@ -513,7 +517,6 @@
       mediaRecorder.start();
 
       isListening = true;
-      fileBtn.disabled = true; // one audio source at a time; transcribe() re-enables it
       micBtn.classList.add('recording');
       micBtn.textContent = 'Stop recording';
       recStatus.classList.remove('error');
